@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-libloading = "0.8.0"
+bytemuck = "1.13.1"
 pollster = "0.3.0"
 wgpu = { version = "0.16.0", features = ["spirv"] }
 winit = "0.28.4"

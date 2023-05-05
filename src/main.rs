@@ -17,8 +17,10 @@ struct RpslEntry {
 }
 
 extern "C" {
-    #[no_mangle]
     static rpsl_M_hello_triangle_E_main: rps::RpsRpslEntry;
+
+    //#[no_mangle]
+    static rpsl_M_hello_triangle_E_mainBreathing: rps::RpsRpslEntry;
 }
 
 fn vector_to_slice<T, A>(vector: &rps::rps_Vector<T, A>) -> &[T] {
@@ -30,18 +32,14 @@ fn array_ref_to_slice<T>(array_ref: &rps::rps_ArrayRef<T, u64>) -> &[T] {
 }
 
 unsafe extern "C" fn create_command_resources(
-    x: *const std::ffi::c_void,
+    context: *const std::ffi::c_void,
     user_data: *mut std::ffi::c_void,
 ) -> rps::RpsResult {
     let user_data = &mut *(user_data as *mut UserData);
-    //dbg!(&user_data);
 
-    let x = x as *const rps::rps_RenderGraphUpdateContext;
+    let context = *(context as *const rps::rps_RenderGraphUpdateContext);
 
-    //println!("Hello from init");
-    //dbg!(*x, *(*x).pUpdateInfo);
-
-    let render_graph = &*(*x).renderGraph;
+    let render_graph = &*context.renderGraph;
 
     let commands = vector_to_slice(&render_graph.m_cmds);
     let runtime_commands = vector_to_slice(&render_graph.m_runtimeCmdInfos);
@@ -58,24 +56,20 @@ unsafe extern "C" fn create_command_resources(
             let node_decl = *command.pNodeDecl;
             let cmd = *command.pCmdDecl;
             let render_pass_info = *node_decl.pRenderPassInfo;
-            //let render_pass_info = std::mem::transmute::<_, NodeDeclRenderPassInfo>(render_pass_info);
 
             let args = array_ref_to_slice(&cmd.args);
 
             if render_pass_info.clearOnly() == 1 {
-                let refs = /*render_pass_info.render_target_clear_value_refs();*/
-
-                {
-                    std::slice::from_raw_parts(
-                        render_pass_info.paramRefs.add(render_pass_info.clearValueRefs() as usize),
-                        render_pass_info.renderTargetClearMask().count_ones() as usize
-                    )
-                };
+                let refs = std::slice::from_raw_parts(
+                    render_pass_info
+                        .paramRefs
+                        .add(render_pass_info.clearValueRefs() as usize),
+                    render_pass_info.renderTargetClearMask().count_ones() as usize,
+                );
 
                 for r in refs {
                     let clear_colour_ptr =
                         args[r.paramId as usize] as *const rps::RpsClearColorValue;
-                    //dbg!((*clear_colour_ptr).float32);
                     user_data.clear_colour = (*clear_colour_ptr).float32;
                 }
             }
@@ -84,15 +78,43 @@ unsafe extern "C" fn create_command_resources(
 
     rps::RpsResult::RPS_OK
 }
+extern "C" fn default_cb(context: *const rps::RpsCmdCallbackContext) {
+    println!("hello default");
+}
+
 extern "C" fn draw_triangle_cb(context: *const rps::RpsCmdCallbackContext) {
     let context = unsafe { *context };
-    let user_data = unsafe{&*(context.pUserRecordContext as *mut UserData)};
 
-    let render_pass = unsafe {
-        &mut *(context.hCommandBuffer.ptr as *mut wgpu::RenderPass)
-    };
+    let args = unsafe { std::slice::from_raw_parts(context.ppArgs, context.numArgs as usize) };
+
+    let user_data = unsafe { &*(context.pUserRecordContext as *mut UserData) };
+
+    let render_pass = unsafe { &mut *(context.hCommandBuffer.ptr as *mut wgpu::RenderPass) };
 
     render_pass.set_pipeline(&user_data.triangle_pipeline);
+    render_pass.draw(0..3, 0..1);
+}
+
+extern "C" fn draw_triangle_breathing_cb(context: *const rps::RpsCmdCallbackContext) {
+    let context = unsafe { *context };
+
+    let args = unsafe { std::slice::from_raw_parts(context.ppArgs, context.numArgs as usize) };
+
+    let mut aspect_ratio = unsafe { *(args[1] as *const f32) };
+    let time = unsafe { *(args[2] as *const f32) };
+
+    aspect_ratio *= time.sin().abs();
+
+    let user_data = unsafe { &*(context.pUserRecordContext as *mut UserData) };
+
+    let render_pass = unsafe { &mut *(context.hCommandBuffer.ptr as *mut wgpu::RenderPass) };
+
+    render_pass.set_pipeline(&user_data.triangle_pipeline);
+    render_pass.set_push_constants(
+        wgpu::ShaderStages::VERTEX,
+        0,
+        bytemuck::bytes_of(&aspect_ratio),
+    );
     render_pass.draw(0..3, 0..1);
 }
 
@@ -103,6 +125,7 @@ struct UserData {
 }
 
 fn main() {
+    let mut start = std::time::Instant::now();
 
     let event_loop = winit::event_loop::EventLoop::new();
     let window = winit::window::Window::new(&event_loop).unwrap();
@@ -118,9 +141,18 @@ fn main() {
     }))
     .unwrap();
 
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-            .unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            features: wgpu::Features::PUSH_CONSTANTS,
+            limits: wgpu::Limits {
+                max_push_constant_size: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        None,
+    ))
+    .unwrap();
 
     let swapchain_capabilities = surface.get_capabilities(&adapter);
     let swapchain_format = swapchain_capabilities.formats[0];
@@ -138,13 +170,18 @@ fn main() {
 
     surface.configure(&device, &config);
 
-    let vert_shader = device.create_shader_module(wgpu::include_spirv!("../triangle.vert.spv"));
-    let frag_shader = device.create_shader_module(wgpu::include_spirv!("../triangle.frag.spv"));
+    let vert_shader =
+        device.create_shader_module(wgpu::include_spirv!("../triangle_breathing.vert.spv"));
+    let frag_shader =
+        device.create_shader_module(wgpu::include_spirv!("../triangle_breathing.frag.spv"));
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[],
-        push_constant_ranges: &[],
+        push_constant_ranges: &[wgpu::PushConstantRange {
+            stages: wgpu::ShaderStages::VERTEX,
+            range: 0..4,
+        }],
     });
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -166,9 +203,9 @@ fn main() {
         multiview: None,
     });
 
-    let mut user_data = Box::new(UserData {
+    let user_data = Box::new(UserData {
         clear_colour: [1.0; 4],
-        triangle_pipeline: render_pipeline
+        triangle_pipeline: render_pipeline,
     });
 
     let user_data_raw = Box::into_raw(user_data);
@@ -189,7 +226,7 @@ fn main() {
             },
             &mut rps_device,
             Some(create_command_resources),
-            user_data_raw as *mut std::ffi::c_void,
+            user_data_raw as _,
         )
     })
     .unwrap();
@@ -226,26 +263,48 @@ fn main() {
 
     graph_create_info.scheduleInfo.pQueueInfos = queue_flags.as_ptr();
     graph_create_info.scheduleInfo.numQueues = queue_flags.len() as u32;
-    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint = unsafe { rpsl_M_hello_triangle_E_main };
-
-    let x = unsafe { *(rpsl_M_hello_triangle_E_main as *const RpslEntry) };
+    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint =
+        unsafe { rpsl_M_hello_triangle_E_mainBreathing };
 
     map_result(unsafe { rps::rpsRenderGraphCreate(rps_device, &graph_create_info, &mut graph) })
         .unwrap();
 
     let subprogram = unsafe { rps::rpsRenderGraphGetMainEntry(graph) };
 
-    let callback = rps::RpsCmdCallback {
-        pfnCallback: Some(draw_triangle_cb),
-        pUserContext: std::ptr::null_mut(),
-        flags: 0,
-    };
-
     map_result(unsafe {
-        rps::rpsProgramBindNodeCallback(subprogram, b"Triangle\0".as_ptr() as *const i8, &callback)
+        rps::rpsProgramBindNodeCallback(
+            subprogram,
+            b"Triangle\0".as_ptr() as _,
+            &rps::RpsCmdCallback {
+                pfnCallback: Some(draw_triangle_cb),
+                pUserContext: std::ptr::null_mut(),
+                flags: 0,
+            },
+        )
     })
     .unwrap();
 
+    map_result(unsafe {
+        rps::rpsProgramBindNodeCallback(
+            subprogram,
+            b"TriangleBreathing\0".as_ptr() as _,
+            &rps::RpsCmdCallback {
+                pfnCallback: Some(draw_triangle_breathing_cb),
+                pUserContext: std::ptr::null_mut(),
+                flags: 0,
+            },
+        )
+    })
+    .unwrap();
+
+    /*map_result(unsafe {
+        rps::rpsProgramBindNodeCallback(subprogram, std::ptr::null(), &rps::RpsCmdCallback {
+            pfnCallback: Some(default_cb),
+            pUserContext: std::ptr::null_mut(),
+            flags: 0,
+        })
+    })
+    .unwrap();*/
 
     let mut completed_frame_index = u64::max_value();
     let mut frame_index = 0;
@@ -263,6 +322,9 @@ fn main() {
                 // On macos the window needs to be redrawn manually after resizing
                 window.request_redraw();
             }
+            winit::event::Event::MainEventsCleared => {
+                window.request_redraw();
+            }
             winit::event::Event::RedrawRequested(_) => {
                 let mut update_info: rps::RpsRenderGraphUpdateInfo = unsafe { std::mem::zeroed() };
 
@@ -277,18 +339,24 @@ fn main() {
                             mipLevels: 1,
                             sampleCount: 1,
                             format: rps::RpsFormat_RPS_FORMAT_R8G8B8A8_UNORM,
-                            __bindgen_anon_1: rps::RpsResourceDesc__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
-                                arrayLayers: 1,
-                            },
+                            __bindgen_anon_1:
+                                rps::RpsResourceDesc__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1 {
+                                    arrayLayers: 1,
+                                },
                         },
                     },
                 };
 
-                let args: [rps::RpsConstant; 1] = [(&back_buffer) as *const rps::RpsResourceDesc as _];
+                let time = (std::time::Instant::now() - start).as_secs_f32();
+
+                let args: &[rps::RpsConstant] = &[
+                    (&back_buffer) as *const rps::RpsResourceDesc as _,
+                    (&time) as *const f32 as _,
+                ];
 
                 update_info.frameIndex = frame_index;
                 update_info.gpuCompletedFrameIndex = completed_frame_index;
-                update_info.numArgs = 1;
+                update_info.numArgs = args.len() as u32;
                 update_info.ppArgs = args.as_ptr();
 
                 map_result(unsafe { rps::rpsRenderGraphUpdate(graph, &update_info) }).unwrap();
@@ -302,9 +370,7 @@ fn main() {
                 let mut encoder =
                     device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
                 {
-                    let user_data = unsafe {
-                        &*user_data_raw
-                    };
+                    let user_data = unsafe { &*user_data_raw };
 
                     let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
@@ -343,9 +409,9 @@ fn main() {
                             frameIndex: frame_index,
                             flags: 0,
                             hCmdBuffer: rps::RpsRuntimeCommandBuffer_T {
-                                ptr: (&mut rpass) as *mut wgpu::RenderPass as *mut std::ffi::c_void,
+                                ptr: (&mut rpass) as *mut wgpu::RenderPass as _,
                             },
-                            pUserContext: user_data_raw as *mut std::ffi::c_void,
+                            pUserContext: user_data_raw as _,
                         };
 
                         map_result(unsafe {

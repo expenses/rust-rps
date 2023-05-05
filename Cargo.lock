@@ -989,7 +989,7 @@ checksum = "216080ab382b992234dda86873c18d4c48358f5cfcb70fd693d7f6f2131b628b"
 name = "rust-rps"
 version = "0.1.0"
 dependencies = [
- "libloading 0.8.0",
+ "bytemuck",
  "pollster",
  "wgpu",
  "winit",
