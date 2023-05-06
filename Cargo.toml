@@ -8,7 +8,10 @@ edition = "2021"
 [dependencies]
 bitflags = "2.2.1"
 bytemuck = "1.13.1"
+libloading = "0.8.0"
 pollster = "0.3.0"
+rspirv-reflect = "0.7.0"
+structopt = "0.3.26"
 wgpu = { version = "0.16.0", features = ["spirv"] }
 winit = "0.28.4"
 

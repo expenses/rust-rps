@@ -1,6 +1,6 @@
 use crate::{
-    array_ref_to_mut_slice, map_rps_format_to_wgpu, rps, vector_to_slice, AccessFlagBits,
-    BorrowedOrOwned, CommandBuffer, Resource, UserData,
+    mapping::{array_ref_to_mut_slice, map_rps_format_to_wgpu, vector_to_slice, AccessFlagBits},
+    rps, BorrowedOrOwned, CommandBuffer, Resource, UserData,
 };
 use std::ffi::c_void;
 
