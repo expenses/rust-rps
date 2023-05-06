@@ -1,10 +1,16 @@
 #![allow(nonstandard_style)]
 
-use bitflags::bitflags;
 use std::ffi::c_void;
+use std::io::Write;
+use std::path::PathBuf;
+use structopt::StructOpt;
 
 mod builtin_callbacks;
+mod mapping;
 mod node_callbacks;
+mod reflection;
+
+use mapping::{map_result, map_wgpu_format_to_rps};
 
 pub mod rps {
     #![allow(rustdoc::broken_intra_doc_links)]
@@ -18,75 +24,53 @@ pub mod rps {
     pub use root::*;
 }
 
-bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    struct ShaderStages: u32 {
-        const VS = rps::root::RpsShaderStageBits::RPS_SHADER_STAGE_VS as u32;
-        const PS = rps::root::RpsShaderStageBits::RPS_SHADER_STAGE_PS as u32;
-    }
-}
-
-bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-    struct AccessFlagBits: i32 {
-        const INDIRECT_ARGS = rps::root::RpsAccessFlagBits::RPS_ACCESS_INDIRECT_ARGS_BIT as i32;
-        const INDEX_BUFFER = rps::root::RpsAccessFlagBits::RPS_ACCESS_INDEX_BUFFER_BIT as i32;
-        const VERTEX_BUFFER = rps::root::RpsAccessFlagBits::RPS_ACCESS_VERTEX_BUFFER_BIT as i32;
-        const CONSTANT_BUFFER = rps::root::RpsAccessFlagBits::RPS_ACCESS_CONSTANT_BUFFER_BIT as i32;
-        const SHADER_RESOURCE = rps::root::RpsAccessFlagBits::RPS_ACCESS_SHADER_RESOURCE_BIT as i32;
-        const UNORDERED_ACCESS = rps::root::RpsAccessFlagBits::RPS_ACCESS_UNORDERED_ACCESS_BIT as i32;
-        const SHADING_RATE = rps::root::RpsAccessFlagBits::RPS_ACCESS_SHADING_RATE_BIT as i32;
-        const RENDER_TARGET = rps::root::RpsAccessFlagBits::RPS_ACCESS_RENDER_TARGET_BIT as i32;
-        const DEPTH_READ = rps::root::RpsAccessFlagBits::RPS_ACCESS_DEPTH_READ_BIT as i32;
-        const DEPTH_WRITE = rps::root::RpsAccessFlagBits::RPS_ACCESS_DEPTH_WRITE_BIT as i32;
-        const STENCIL_READ = rps::root::RpsAccessFlagBits::RPS_ACCESS_STENCIL_READ_BIT as i32;
-        const STENCIL_WRITE = rps::root::RpsAccessFlagBits::RPS_ACCESS_STENCIL_WRITE_BIT as i32;
-        const STREAM_OUT = rps::root::RpsAccessFlagBits::RPS_ACCESS_STREAM_OUT_BIT as i32;
-        const COPY_SRC = rps::root::RpsAccessFlagBits::RPS_ACCESS_COPY_SRC_BIT as i32;
-        const COPY_DEST = rps::root::RpsAccessFlagBits::RPS_ACCESS_COPY_DEST_BIT as i32;
-        const RESOLVE_SRC = rps::root::RpsAccessFlagBits::RPS_ACCESS_RESOLVE_SRC_BIT as i32;
-        const RESOLVE_DEST = rps::root::RpsAccessFlagBits::RPS_ACCESS_RESOLVE_DEST_BIT as i32;
-        const RAYTRACING_AS_BUILD = rps::root::RpsAccessFlagBits::RPS_ACCESS_RAYTRACING_AS_BUILD_BIT as i32;
-        const RAYTRACING_AS_READ = rps::root::RpsAccessFlagBits::RPS_ACCESS_RAYTRACING_AS_READ_BIT as i32;
-        const PRESENT = rps::root::RpsAccessFlagBits::RPS_ACCESS_PRESENT_BIT as i32;
-        const CPU_READ = rps::root::RpsAccessFlagBits::RPS_ACCESS_CPU_READ_BIT as i32;
-        const CPU_WRITE = rps::root::RpsAccessFlagBits::RPS_ACCESS_CPU_WRITE_BIT as i32;
-        const DISCARD_DATA_BEFORE = rps::root::RpsAccessFlagBits::RPS_ACCESS_DISCARD_DATA_BEFORE_BIT as i32;
-        const DISCARD_DATA_AFTER = rps::root::RpsAccessFlagBits::RPS_ACCESS_DISCARD_DATA_AFTER_BIT as i32;
-        const STENCIL_DISCARD_DATA_BEFORE = rps::root::RpsAccessFlagBits::RPS_ACCESS_STENCIL_DISCARD_DATA_BEFORE_BIT as i32;
-        const STENCIL_DISCARD_DATA_AFTER = rps::root::RpsAccessFlagBits::RPS_ACCESS_STENCIL_DISCARD_DATA_AFTER_BIT as i32;
-        const BEFORE = rps::root::RpsAccessFlagBits::RPS_ACCESS_BEFORE_BIT as i32;
-        const AFTER = rps::root::RpsAccessFlagBits::RPS_ACCESS_AFTER_BIT as i32;
-        const CLEAR = rps::root::RpsAccessFlagBits::RPS_ACCESS_CLEAR_BIT as i32;
-    }
-}
-
-extern "C" {
-    static rpsl_M_rps_multithreading_E_main: rps::RpsRpslEntry;
-
-    static rpsl_M_upscale_E_hello_rpsl: rps::RpsRpslEntry;
-}
-
-fn vector_to_slice<T, A>(vector: &rps::rps::Vector<T, A>) -> &[T] {
-    unsafe { std::slice::from_raw_parts(vector.m_pArray, vector.m_Count) }
-}
-
-fn array_ref_to_mut_slice<T>(array_ref: &mut rps::rps::ArrayRef<T, u64>) -> &mut [T] {
-    unsafe { std::slice::from_raw_parts_mut(array_ref.m_pData, array_ref.m_Size as usize) }
-}
+type DynamicLibraryInitFunction =
+    unsafe extern "C" fn(pProcs: *const rps::___rpsl_runtime_procs, sizeofProcs: u32) -> i32;
 
 #[derive(Debug)]
 struct UserData {
     triangle_pipeline: wgpu::RenderPipeline,
     multithreaded_triangle_pipeline: wgpu::RenderPipeline,
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_pipeline_bgl: wgpu::BindGroupLayout,
     device: wgpu::Device,
+    sampler: wgpu::Sampler,
 }
 
 struct CommandBuffer {
     encoder: Option<wgpu::CommandEncoder>,
 }
 
+#[derive(StructOpt)]
+struct Opts {
+    filename: PathBuf,
+    entry_point: String,
+}
+
 fn main() {
+    let opts = Opts::from_args();
+
+    let file_stem = opts.filename.file_stem().unwrap().to_str().unwrap();
+
+    let lib = unsafe { libloading::Library::new(&opts.filename).unwrap() };
+
+    let symbol: libloading::Symbol<DynamicLibraryInitFunction> =
+        unsafe { lib.get(b"___rps_dyn_lib_init").unwrap() };
+
+    map_result(unsafe { rps::rpsRpslDynamicLibraryInit(Some(*symbol.into_raw())) }).unwrap();
+
+    let entry_name = {
+        let mut name = b"rpsl_M_".to_vec();
+        write!(&mut name, "{}", file_stem).unwrap();
+        write!(&mut name, "_E_").unwrap();
+        write!(&mut name, "{}", opts.entry_point).unwrap();
+        name
+    };
+
+    let entry: libloading::Symbol<rps::RpsRpslEntry> = unsafe { lib.get(&entry_name) }.unwrap();
+
+    let entry = unsafe { entry.into_raw().into_raw() as *const *const c_void };
+
     let start = std::time::Instant::now();
 
     let event_loop = winit::event_loop::EventLoop::new();
@@ -132,6 +116,28 @@ fn main() {
 
     surface.configure(&device, &config);
 
+    let settings = reflection::ShaderSettings::default();
+
+    let blit_vert_bytes = std::fs::read("shaders/blit.vert.spv").unwrap();
+    let blit_frag_bytes = std::fs::read("shaders/blit.frag.spv").unwrap();
+
+    let x = reflection::reflect_bind_group_layout_entries(
+        &rspirv_reflect::Reflection::new_from_spirv(&blit_vert_bytes).unwrap(),
+        &settings,
+    );
+
+    let y = reflection::reflect_bind_group_layout_entries(
+        &rspirv_reflect::Reflection::new_from_spirv(&blit_frag_bytes).unwrap(),
+        &settings,
+    );
+
+    let merged = reflection::merge_bind_group_layout_entries(&x, &y);
+
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &merged[&0],
+    });
+
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
         bind_group_layouts: &[],
@@ -139,6 +145,12 @@ fn main() {
             stages: wgpu::ShaderStages::VERTEX,
             range: 0..4,
         }],
+    });
+
+    let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
     });
 
     let user_data = Box::new(UserData {
@@ -186,6 +198,35 @@ fn main() {
                 multiview: None,
             },
         ),
+        blit_pipeline: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&blit_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: None,
+                    source: wgpu::util::make_spirv(&blit_vert_bytes),
+                }),
+                entry_point: "VSMain",
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: None,
+                    source: wgpu::util::make_spirv(&blit_frag_bytes),
+                }),
+                entry_point: "PSMain",
+                targets: &[Some(swapchain_format.into())],
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        }),
+        sampler: device.create_sampler(&Default::default()),
+        blit_pipeline_bgl: bind_group_layout,
         device,
     });
 
@@ -226,16 +267,7 @@ fn main() {
 
     graph_create_info.scheduleInfo.pQueueInfos = queue_flags.as_ptr();
     graph_create_info.scheduleInfo.numQueues = queue_flags.len() as u32;
-
-    let mut multithreading = true;
-
-    if multithreading {
-        graph_create_info.mainEntryCreateInfo.hRpslEntryPoint =
-            unsafe { rpsl_M_rps_multithreading_E_main };
-    } else {
-        graph_create_info.mainEntryCreateInfo.hRpslEntryPoint =
-            unsafe { rpsl_M_upscale_E_hello_rpsl };
-    }
+    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint = (*entry) as *mut _;
 
     map_result(unsafe { rps::rpsRenderGraphCreate(rps_device, &graph_create_info, &mut graph) })
         .unwrap();
@@ -420,27 +452,6 @@ fn main() {
             _ => {}
         }
     });
-}
-
-fn map_result(rps_result: rps::RpsResult) -> Result<(), rps::RpsResult> {
-    match rps_result {
-        rps::RpsResult::RPS_OK => Ok(()),
-        _ => Err(rps_result),
-    }
-}
-
-fn map_wgpu_format_to_rps(format: wgpu::TextureFormat) -> rps::RpsFormat {
-    match format {
-        wgpu::TextureFormat::Bgra8UnormSrgb => rps::RpsFormat::RPS_FORMAT_B8G8R8A8_UNORM_SRGB,
-        other => panic!("{:?}", other),
-    }
-}
-
-fn map_rps_format_to_wgpu(format: rps::RpsFormat) -> wgpu::TextureFormat {
-    match format {
-        rps::RpsFormat::RPS_FORMAT_B8G8R8A8_UNORM_SRGB => wgpu::TextureFormat::Bgra8UnormSrgb,
-        other => panic!("{:?}", other),
-    }
 }
 
 enum Resource {

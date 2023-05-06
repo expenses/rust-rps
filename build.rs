@@ -1,9 +1,3 @@
-fn bind_shader(parent_dir: &str, shader: &str) {
-    println!("cargo:rustc-link-search={}", parent_dir);
-    println!("cargo:rustc-link-lib=static={}", shader);
-    println!("cargo:rerun-if-changed={}/lib{}.a", parent_dir, shader);
-}
-
 fn main() {
     let rps_lib_dir = cmake::Config::new("RenderPipelineShaders")
         .build_target("all")
@@ -54,13 +48,10 @@ fn main() {
     println!("cargo:rustc-link-search={}", rps_lib_dir.display());
     println!("cargo:rustc-link-search={}", out_path.display());
 
-    println!("cargo:rustc-link-lib=static=callback_runtime");
+    println!("cargo:rustc-link-lib=callback_runtime");
     println!("cargo:rustc-link-lib=rps_runtime");
     println!("cargo:rustc-link-lib=rps_core");
     println!("cargo:rustc-link-lib=stdc++");
-
-    bind_shader("pipeline_shaders", "upscale");
-    bind_shader("pipeline_shaders", "rps_multithreading");
 
     println!("cargo:rerun-if-changed={}", source_file);
 
