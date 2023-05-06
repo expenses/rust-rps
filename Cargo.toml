@@ -14,3 +14,4 @@ winit = "0.28.4"
 
 [build-dependencies]
 bindgen = "0.65.1"
+cmake = "0.1.50"

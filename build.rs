@@ -5,6 +5,12 @@ fn bind_shader(parent_dir: &str, shader: &str) {
 }
 
 fn main() {
+    let rps_lib_dir = cmake::Config::new("RenderPipelineShaders")
+        .build_target("all")
+        .build()
+        .join("build")
+        .join("src");
+
     let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
     let source_file = "callback_runtime.cpp";
@@ -45,7 +51,7 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
-    println!("cargo:rustc-link-search=RenderPipelineShaders/build/src");
+    println!("cargo:rustc-link-search={}", rps_lib_dir.display());
     println!("cargo:rustc-link-search={}", out_path.display());
 
     println!("cargo:rustc-link-lib=static=callback_runtime");
