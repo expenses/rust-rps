@@ -1,6 +1,5 @@
 /target
 *.o
-*.a
 *.rpsl.g.c
 *.rps.ll
 src/tmp.rs

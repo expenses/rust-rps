@@ -1,12 +1,15 @@
-fn bind_shader(shader: &str) {
+fn bind_shader(parent_dir: &str, shader: &str) {
+    println!("cargo:rustc-link-search={}", parent_dir);
     println!("cargo:rustc-link-lib=static={}", shader);
-    println!("cargo:rerun-if-changed=lib{}.a", shader);
+    println!("cargo:rerun-if-changed={}/lib{}.a", parent_dir, shader);
 }
 
 fn main() {
+    let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+
     let source_file = "callback_runtime.cpp";
-    let object_file = "callback_runtime.o";
-    let archive_file = "libcallback_runtime.a";
+    let object_file = out_path.join("callback_runtime.o");
+    let archive_file = out_path.join("libcallback_runtime.a");
 
     let bindings = bindgen::Builder::default()
         .header(source_file)
@@ -38,27 +41,27 @@ fn main() {
         .generate()
         .expect("Unable to generate bindings");
 
-    let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
     println!("cargo:rustc-link-search=RenderPipelineShaders/build/src");
-    println!("cargo:rustc-link-search=.");
+    println!("cargo:rustc-link-search={}", out_path.display());
+
     println!("cargo:rustc-link-lib=static=callback_runtime");
     println!("cargo:rustc-link-lib=rps_runtime");
     println!("cargo:rustc-link-lib=rps_core");
     println!("cargo:rustc-link-lib=stdc++");
 
-    bind_shader("upscale");
-    bind_shader("rps_multithreading");
+    bind_shader("pipeline_shaders", "upscale");
+    bind_shader("pipeline_shaders", "rps_multithreading");
 
     println!("cargo:rerun-if-changed={}", source_file);
 
     if !std::process::Command::new("clang")
         .arg("-c")
         .arg("-o")
-        .arg(object_file)
+        .arg(&object_file)
         .arg(source_file)
         .arg("-IRenderPipelineShaders/src")
         .arg("-IRenderPipelineShaders/include")
@@ -73,8 +76,8 @@ fn main() {
 
     if !std::process::Command::new("ar")
         .arg("rcs")
-        .arg(archive_file)
-        .arg(object_file)
+        .arg(&archive_file)
+        .arg(&object_file)
         .output()
         .expect("could not spawn `ar`")
         .status
