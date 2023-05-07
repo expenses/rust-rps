@@ -47,7 +47,7 @@ pub unsafe extern "C" fn draw_triangle(context: *const rps::RpsCmdCallbackContex
                 depth_stencil_attachment: None,
             });
 
-    render_pass.set_pipeline(&user_data.triangle_pipeline);
+    render_pass.set_pipeline(&user_data.triangle_pipeline.pipeline);
     render_pass.draw(0..3, 0..1);
 }
 
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn geometry_pass(context: *const rps::RpsCmdCallbackContex
         viewport.maxZ,
     );
 
-    render_pass.set_pipeline(&user_data.multithreaded_triangle_pipeline);
+    render_pass.set_pipeline(&user_data.multithreaded_triangle_pipeline.pipeline);
     render_pass.set_push_constants(
         wgpu::ShaderStages::VERTEX,
         0,
@@ -162,7 +162,7 @@ pub unsafe extern "C" fn upscale(context: *const rps::RpsCmdCallbackContext) {
         .device
         .create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &user_data.blit_pipeline_bgl,
+            layout: &user_data.blit_pipeline.bind_group_layouts[&0],
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -193,7 +193,7 @@ pub unsafe extern "C" fn upscale(context: *const rps::RpsCmdCallbackContext) {
                 depth_stencil_attachment: None,
             });
 
-    render_pass.set_pipeline(&user_data.blit_pipeline);
+    render_pass.set_pipeline(&user_data.blit_pipeline.pipeline);
     render_pass.set_bind_group(0, &bind_group, &[]);
     render_pass.draw(0..3, 0..1);
 }
