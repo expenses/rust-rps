@@ -27,12 +27,116 @@ pub mod rps {
 type DynamicLibraryInitFunction =
     unsafe extern "C" fn(pProcs: *const rps::___rpsl_runtime_procs, sizeofProcs: u32) -> i32;
 
-#[derive(Debug)]
+struct RenderPipeline {
+    bind_group_layouts: std::collections::BTreeMap<u32, wgpu::BindGroupLayout>,
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl RenderPipeline {
+    fn new(
+        device: &wgpu::Device,
+        vertex_shader_filename: &str,
+        fragment_shader_filename: &str,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        let vert_shader_bytes = std::fs::read(vertex_shader_filename).unwrap();
+        let frag_shader_bytes = std::fs::read(fragment_shader_filename).unwrap();
+
+        let settings = reflection::ShaderSettings::default();
+
+        let vert_reflection =
+            rspirv_reflect::Reflection::new_from_spirv(&vert_shader_bytes).unwrap();
+
+        let vert_bgl_entries =
+            reflection::reflect_bind_group_layout_entries(&vert_reflection, &settings);
+
+        let frag_reflection =
+            rspirv_reflect::Reflection::new_from_spirv(&frag_shader_bytes).unwrap();
+
+        let frag_bgl_entries =
+            reflection::reflect_bind_group_layout_entries(&frag_reflection, &settings);
+
+        let (vert_push_constant_info, vert_push_constant_stages) =
+            match vert_reflection.get_push_constant_range() {
+                Ok(Some(info)) => (info, wgpu::ShaderStages::VERTEX),
+                _ => (
+                    rspirv_reflect::PushConstantInfo { offset: 0, size: 0 },
+                    wgpu::ShaderStages::NONE,
+                ),
+            };
+        let (frag_push_constant_info, frag_push_constant_stages) =
+            match frag_reflection.get_push_constant_range() {
+                Ok(Some(info)) => (info, wgpu::ShaderStages::FRAGMENT),
+                _ => (
+                    rspirv_reflect::PushConstantInfo { offset: 0, size: 0 },
+                    wgpu::ShaderStages::NONE,
+                ),
+            };
+
+        let push_constant_size = vert_push_constant_info
+            .size
+            .max(frag_push_constant_info.size);
+
+        let merged_bgl_entries =
+            reflection::merge_bind_group_layout_entries(&vert_bgl_entries, &frag_bgl_entries);
+
+        let mut bind_group_layouts = std::collections::BTreeMap::new();
+
+        for (id, entries) in merged_bgl_entries.iter() {
+            bind_group_layouts.insert(
+                *id,
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: entries,
+                }),
+            );
+        }
+
+        let bind_group_layout_refs: Vec<_> = bind_group_layouts.values().collect();
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &bind_group_layout_refs,
+            push_constant_ranges: &[wgpu::PushConstantRange {
+                stages: vert_push_constant_stages | frag_push_constant_stages,
+                range: 0..push_constant_size,
+            }],
+        });
+
+        Self {
+            bind_group_layouts,
+            pipeline: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: None,
+                        source: wgpu::util::make_spirv(&vert_shader_bytes),
+                    }),
+                    entry_point: "VSMain",
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: None,
+                        source: wgpu::util::make_spirv(&frag_shader_bytes),
+                    }),
+                    entry_point: "PSMain",
+                    targets: &[Some(format.into())],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            }),
+        }
+    }
+}
+
 struct UserData {
-    triangle_pipeline: wgpu::RenderPipeline,
-    multithreaded_triangle_pipeline: wgpu::RenderPipeline,
-    blit_pipeline: wgpu::RenderPipeline,
-    blit_pipeline_bgl: wgpu::BindGroupLayout,
+    triangle_pipeline: RenderPipeline,
+    multithreaded_triangle_pipeline: RenderPipeline,
+    blit_pipeline: RenderPipeline,
     device: wgpu::Device,
     sampler: wgpu::Sampler,
 }
@@ -59,15 +163,9 @@ fn main() {
 
     map_result(unsafe { rps::rpsRpslDynamicLibraryInit(Some(*symbol.into_raw())) }).unwrap();
 
-    let entry_name = {
-        let mut name = b"rpsl_M_".to_vec();
-        write!(&mut name, "{}", file_stem).unwrap();
-        write!(&mut name, "_E_").unwrap();
-        write!(&mut name, "{}", opts.entry_point).unwrap();
-        name
-    };
+    let entry_name = format!("rpsl_M_{}_E_{}", file_stem, opts.entry_point);
 
-    let entry: libloading::Symbol<rps::RpsRpslEntry> = unsafe { lib.get(&entry_name) }.unwrap();
+    let entry: libloading::Symbol<rps::RpsRpslEntry> = unsafe { lib.get(entry_name.as_bytes()) }.unwrap();
 
     let entry = unsafe { entry.into_raw().into_raw() as *const *const c_void };
 
@@ -116,117 +214,26 @@ fn main() {
 
     surface.configure(&device, &config);
 
-    let settings = reflection::ShaderSettings::default();
-
-    let blit_vert_bytes = std::fs::read("shaders/blit.vert.spv").unwrap();
-    let blit_frag_bytes = std::fs::read("shaders/blit.frag.spv").unwrap();
-
-    let x = reflection::reflect_bind_group_layout_entries(
-        &rspirv_reflect::Reflection::new_from_spirv(&blit_vert_bytes).unwrap(),
-        &settings,
-    );
-
-    let y = reflection::reflect_bind_group_layout_entries(
-        &rspirv_reflect::Reflection::new_from_spirv(&blit_frag_bytes).unwrap(),
-        &settings,
-    );
-
-    let merged = reflection::merge_bind_group_layout_entries(&x, &y);
-
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: None,
-        entries: &merged[&0],
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[],
-        push_constant_ranges: &[wgpu::PushConstantRange {
-            stages: wgpu::ShaderStages::VERTEX,
-            range: 0..4,
-        }],
-    });
-
-    let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
-    });
-
     let user_data = Box::new(UserData {
-        triangle_pipeline: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &device
-                    .create_shader_module(wgpu::include_spirv!("../shaders/triangle.vert.spv")),
-                entry_point: "VSMain",
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &device
-                    .create_shader_module(wgpu::include_spirv!("../shaders/triangle.frag.spv")),
-                entry_point: "PSMain",
-                targets: &[Some(swapchain_format.into())],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        }),
-        multithreaded_triangle_pipeline: device.create_render_pipeline(
-            &wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &device.create_shader_module(wgpu::include_spirv!(
-                        "../shaders/triangle_breathing.vert.spv"
-                    )),
-                    entry_point: "VSMain",
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &device.create_shader_module(wgpu::include_spirv!(
-                        "../shaders/triangle_breathing.frag.spv"
-                    )),
-                    entry_point: "PSMain",
-                    targets: &[Some(swapchain_format.into())],
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview: None,
-            },
+        multithreaded_triangle_pipeline: RenderPipeline::new(
+            &device,
+            "shaders/triangle_breathing.vert.spv",
+            "shaders/triangle_breathing.frag.spv",
+            swapchain_format,
         ),
-        blit_pipeline: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&blit_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: None,
-                    source: wgpu::util::make_spirv(&blit_vert_bytes),
-                }),
-                entry_point: "VSMain",
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: None,
-                    source: wgpu::util::make_spirv(&blit_frag_bytes),
-                }),
-                entry_point: "PSMain",
-                targets: &[Some(swapchain_format.into())],
-            }),
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        }),
+        triangle_pipeline: RenderPipeline::new(
+            &device,
+            "shaders/triangle.vert.spv",
+            "shaders/triangle.frag.spv",
+            swapchain_format,
+        ),
+        blit_pipeline: RenderPipeline::new(
+            &device,
+            "shaders/blit.vert.spv",
+            "shaders/blit.frag.spv",
+            swapchain_format,
+        ),
         sampler: device.create_sampler(&Default::default()),
-        blit_pipeline_bgl: bind_group_layout,
         device,
     });
 
@@ -267,7 +274,11 @@ fn main() {
 
     graph_create_info.scheduleInfo.pQueueInfos = queue_flags.as_ptr();
     graph_create_info.scheduleInfo.numQueues = queue_flags.len() as u32;
-    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint = (*entry) as *mut _;
+    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint = unsafe { (*entry) as *mut _ };
+
+    /*dbg!(unsafe {
+        *(graph_create_info.mainEntryCreateInfo.hRpslEntryPoint as *const RpslEntry)
+    });*/
 
     map_result(unsafe { rps::rpsRenderGraphCreate(rps_device, &graph_create_info, &mut graph) })
         .unwrap();
