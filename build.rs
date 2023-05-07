@@ -12,6 +12,7 @@ fn main() {
     let archive_file = out_path.join("libcallback_runtime.a");
 
     let bindings = bindgen::Builder::default()
+        .header("imports.c")
         .header(source_file)
         .opaque_type("std::.*")
         .allowlist_function("add_callback_runtime")
@@ -23,9 +24,12 @@ fn main() {
         .allowlist_type("Callbacks")
         .opaque_type("rps::Arena")
         .opaque_type(".*Pool.*")
+        .allowlist_function("Rpsl.*")
+        .allowlist_type("DXILOpCode")
         // This inherits from ParamDecl and is thus pretty broken.
         .opaque_type("rps::NodeParamDecl")
         .rustified_enum("Rps.*")
+        //.rustified_enum("DXILOpCode")
         .enable_cxx_namespaces()
         .clang_args([
             "-I",

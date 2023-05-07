@@ -12,7 +12,7 @@ graphics node GeometryPass(rtv renderTarget
 export void main([readonly(present)] texture backbuffer, float timeInSeconds)
 {
     // clear and then render geometry to back buffer
-    clear(backbuffer, float4(0.0, 0.0, 0.0, 0.0));
+    //clear(backbuffer, float4(0.0, 0.0, 0.0, 0.0));
     ResourceDesc texDesc = backbuffer.desc();
 
     float oneOverAspectRatio = (texDesc.Width) ? (float(texDesc.Height) / texDesc.Width) : 1.0;

@@ -1,0 +1,1 @@
+clang rps_multithreading.rpsl.g.c  -I wasm_stubs/ -I RenderPipelineShaders/include/ -o pipeline_shaders/rps_multithreading.wasm -DRPS_SHADER_GUEST=1 --target=wasm64 --no-standard-libraries -Wl,--export-all -Wl,--no-entry, -Wl,--import-undefined -I wasm_stubs -O3 -Wall -Werror

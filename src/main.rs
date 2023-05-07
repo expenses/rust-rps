@@ -151,23 +151,337 @@ struct Opts {
     entry_point: String,
 }
 
+use wasmtime::*;
+
+fn offset_pointer_by_pointer<A, B>(pointer: *const A, offset: *const B) -> *const A {
+    unsafe { (pointer as *const u8).add(offset as usize) as *const A }
+}
+
+type StoreInner = usize;
+
+struct WasmEntry {
+    func: TypedFunc<(u32, u64, u32), ()>,
+    store: Store<StoreInner>,
+    memory: Memory,
+    params: Vec<rps::RpsParameterDesc>,
+}
+
+static mut WASM_ENTRY: Option<WasmEntry> = None;
+
+unsafe extern "C" fn wasm_entry_point(
+    numArgs: u32,
+    mut ppArgs: *const *const c_void,
+    flags: rps::RpslEntryCallFlags,
+) {
+    let entry = WASM_ENTRY.as_mut().unwrap();
+
+    let mut offset = 67904; //;entry.memory.data_size(&entry.store);
+
+    let ptr = offset as u64;
+
+    let x = (*ppArgs) as *const rps::RpsResourceDesc;
+    let x = *x;
+    let img = x.__bindgen_anon_1.image;
+    dbg!(x, entry.params[0], img.width, img.height, img.__bindgen_anon_1.depth, );
+
+    let args = std::slice::from_raw_parts(ppArgs, numArgs as usize);
+
+    for (i, &arg) in args.into_iter().enumerate() {
+        let arg_slice =
+            std::slice::from_raw_parts(arg as *const u8, entry.params[i].typeInfo.size as usize);
+
+        entry
+            .memory
+            .write(&mut entry.store, offset, arg_slice)
+            .unwrap();
+
+        offset += arg_slice.len();
+    }
+
+    entry
+        .memory
+        .write(&mut entry.store, offset, &ptr.to_le_bytes())
+        .unwrap();
+
+    let ptr_ptr = offset as u64;
+
+    entry
+        .func
+        .call(&mut entry.store, (numArgs, ptr_ptr, flags))
+        .unwrap()
+}
+
 fn main() {
     let opts = Opts::from_args();
 
     let file_stem = opts.filename.file_stem().unwrap().to_str().unwrap();
 
-    let lib = unsafe { libloading::Library::new(&opts.filename).unwrap() };
-
-    let symbol: libloading::Symbol<DynamicLibraryInitFunction> =
-        unsafe { lib.get(b"___rps_dyn_lib_init").unwrap() };
-
-    map_result(unsafe { rps::rpsRpslDynamicLibraryInit(Some(*symbol.into_raw())) }).unwrap();
-
     let entry_name = format!("rpsl_M_{}_E_{}", file_stem, opts.entry_point);
 
-    let entry: libloading::Symbol<rps::RpsRpslEntry> = unsafe { lib.get(entry_name.as_bytes()) }.unwrap();
+    let engine = Engine::new(Config::new().wasm_memory64(true)).unwrap();
+    let mut store = Store::new(&engine, 0);
+    let module = Module::from_file(&engine, &opts.filename).unwrap();
 
-    let entry = unsafe { entry.into_raw().into_raw() as *const *const c_void };
+    let rpsl_abort = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>, error_code: i32| {
+            println!("got error code: {}", error_code);
+        },
+    );
+
+    let rpsl_block_marker = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>,
+         marker_type: u32,
+         block_index: u32,
+         resource_count: u32,
+         node_count: u32,
+         local_loop_index: u32,
+         num_children: u32,
+         parent_id: u32| {
+            let err = map_result(unsafe {
+                rps::RpslHostBlockMarker(
+                    marker_type,
+                    block_index,
+                    resource_count,
+                    node_count,
+                    local_loop_index,
+                    num_children,
+                    parent_id,
+                )
+            });
+
+            err.unwrap();
+        },
+    );
+
+    let rpsl_describe_handle = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>,
+         mut pOutData: /* *mut c_void*/ i64,
+         dataSize: u32,
+         mut inHandle: /* *const u32*/ i64,
+         describeOp: u32| {
+            let offset = *caller.data();
+            pOutData += offset as i64;
+            inHandle += offset as i64;
+
+            let err = map_result(unsafe {
+                rps::RpslHostDescribeHandle(pOutData as _, dataSize, inHandle as _, describeOp)
+            })
+            .unwrap();
+        },
+    );
+
+    let rpsl_dxop_binary_i32 = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>, op: u32, a: u32, b: u32| -> u32 {
+            fn to_signed(value: u32) -> i32 {
+                i32::from_le_bytes(value.to_le_bytes())
+            }
+
+            fn to_unsigned(value: i32) -> u32 {
+                u32::from_le_bytes(value.to_le_bytes())
+            }
+
+            match op {
+                rps::DXILOpCode_IMax => to_unsigned(to_signed(a).max(to_signed(b))),
+                rps::DXILOpCode_IMin => to_unsigned(to_signed(a).min(to_signed(b))),
+                rps::DXILOpCode_UMax => a.max(b),
+                rps::DXILOpCode_UMin => a.min(b),
+                _ => unimplemented!("{}", op),
+            }
+        },
+    );
+
+    let rpsl_create_resource = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>,
+         ty: u32,
+         flags: u32,
+         format: u32,
+         width: u32,
+         height: u32,
+         depthOrArraySize: u32,
+         mipLevels: u32,
+         sampleCount: u32,
+         sampleQuality: u32,
+         temporalLayers: u32,
+         id: u32| {
+            let mut resource_id = 0;
+
+            dbg!(depthOrArraySize, mipLevels);
+
+            map_result(unsafe {
+                rps::RpslHostCreateResource(
+                    ty,
+                    flags,
+                    format,
+                    width,
+                    height,
+                    depthOrArraySize,
+                    mipLevels,
+                    sampleCount,
+                    sampleQuality,
+                    temporalLayers,
+                    id,
+                    &mut resource_id,
+                )
+            })
+            .unwrap();
+
+            resource_id
+        },
+    );
+
+    let rpsl_name_resource = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>, resource_hdl: u32, mut name: i64, name_length: u32| {
+
+            let offset = *caller.data();
+            name += offset as i64;
+            let err = map_result(unsafe {
+                rps::RpslHostNameResource(resource_hdl, name as _, name_length)
+            });
+
+            err.unwrap();
+        },
+    );
+
+    let rpsl_node_call = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, StoreInner>,
+         nodeDeclId: u32,
+         numArgs: u32,
+         mut ppArgs: i64,
+         nodeCallFlags: u32,
+         nodeId: u32| {
+            let offset = *caller.data();
+
+            ppArgs += offset as i64;
+
+            unsafe {
+                for i in 0..numArgs {
+                    let mut ptr = (ppArgs as *mut *const c_void).add(i as usize);
+                    *ptr = (*ptr).add(offset as usize);
+                }
+            }
+
+            let mut cmdid = 0;
+            let err = map_result(unsafe {
+                rps::RpslHostCallNode(
+                    nodeDeclId,
+                    numArgs,
+                    ppArgs as _,
+                    nodeCallFlags,
+                    nodeId,
+                    &mut cmdid,
+                )
+            })
+            .unwrap();
+
+            cmdid
+        },
+    );
+
+    let mut instance_imports = Vec::new();
+
+    for import in module.imports() {
+        match import.name() {
+            "___rpsl_describe_handle" => instance_imports.push(rpsl_describe_handle.into()),
+            "___rpsl_abort" => instance_imports.push(rpsl_abort.into()),
+            "___rpsl_block_marker" => instance_imports.push(rpsl_block_marker.into()),
+            "___rpsl_node_call" => instance_imports.push(rpsl_node_call.into()),
+            "___rpsl_dxop_binary_i32" => instance_imports.push(rpsl_dxop_binary_i32.into()),
+            "___rpsl_create_resource" => instance_imports.push(rpsl_create_resource.into()),
+            "___rpsl_name_resource" => instance_imports.push(rpsl_name_resource.into()),
+            other => panic!("Import not handled: {}", other),
+        }
+    }
+
+    let instance = Instance::new(
+        &mut store,
+        &module,
+        &instance_imports,
+    )
+    .unwrap();
+
+    let memory = instance.get_memory(&mut store, "memory").unwrap();
+    let entry_value_pointer = instance
+        .get_global(&mut store, &format!("{}_AE_value", entry_name))
+        .unwrap()
+        .get(&mut store)
+        .unwrap_i64();
+
+    let x = {
+        let data = memory.data(&store);
+        let offset = &data[0] as *const u8;
+        offset as usize
+    };
+
+    *store.data_mut() = x;
+
+    let entry = unsafe {
+        let data = memory.data(&store);
+
+        let offset = &data[0] as *const u8;
+        let ptr = &data[entry_value_pointer as usize] as *const u8 as *mut rps::rps::RpslEntry;
+        let mut actual = &mut *ptr;
+        actual.pfnEntry = Some(wasm_entry_point);
+        actual.name = offset_pointer_by_pointer(actual.name, offset);
+        actual.pParamDescs = offset_pointer_by_pointer(actual.pParamDescs, offset);
+        actual.pNodeDecls = offset_pointer_by_pointer(actual.pNodeDecls, offset);
+
+        let params = std::slice::from_raw_parts_mut(
+            actual.pParamDescs as *mut rps::RpsParameterDesc,
+            actual.numParams as usize,
+        );
+
+        let nodes = std::slice::from_raw_parts_mut(
+            actual.pNodeDecls as *mut rps::RpsNodeDesc,
+            actual.numNodeDecls as usize,
+        );
+
+        for param in &mut *params {
+            param.attr = offset_pointer_by_pointer(param.attr, offset);
+            param.name = offset_pointer_by_pointer(param.name, offset);
+        }
+
+        for node in &mut *nodes {
+            node.name = offset_pointer_by_pointer(node.name, offset);
+            node.pParamDescs = offset_pointer_by_pointer(node.pParamDescs, offset);
+
+            let params = std::slice::from_raw_parts_mut(
+                node.pParamDescs as *mut rps::RpsParameterDesc,
+                node.numParams as usize,
+            );
+
+            for param in &mut *params {
+                param.attr = offset_pointer_by_pointer(param.attr, offset);
+                param.name = offset_pointer_by_pointer(param.name, offset);
+            }
+
+            dbg!(node);
+        }
+
+        let wrapper_fn = instance
+            .get_typed_func(
+                &mut store,
+                &format!("rpsl_M_{}_Fn_{}_wrapper", file_stem, opts.entry_point),
+            )
+            .unwrap();
+
+        WASM_ENTRY = Some(WasmEntry {
+            store,
+            memory,
+            func: wrapper_fn,
+            params: params.to_vec(),
+        });
+
+        //let (store, memory) = WASM_ENTRY.as_mut().map(|entry| (&mut entry.store, &mut entry.memory)).unwrap();
+
+        ptr
+    };
 
     let start = std::time::Instant::now();
 
@@ -274,11 +588,7 @@ fn main() {
 
     graph_create_info.scheduleInfo.pQueueInfos = queue_flags.as_ptr();
     graph_create_info.scheduleInfo.numQueues = queue_flags.len() as u32;
-    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint = unsafe { (*entry) as *mut _ };
-
-    /*dbg!(unsafe {
-        *(graph_create_info.mainEntryCreateInfo.hRpslEntryPoint as *const RpslEntry)
-    });*/
+    graph_create_info.mainEntryCreateInfo.hRpslEntryPoint = (entry) as rps::RpsRpslEntry;
 
     map_result(unsafe { rps::rpsRenderGraphCreate(rps_device, &graph_create_info, &mut graph) })
         .unwrap();
@@ -406,6 +716,8 @@ fn main() {
                 first_time = false;
 
                 map_result(unsafe { rps::rpsRenderGraphUpdate(graph, &update_info) }).unwrap();
+
+                panic!();
 
                 {
                     let mut layout: rps::RpsRenderGraphBatchLayout = unsafe { std::mem::zeroed() };

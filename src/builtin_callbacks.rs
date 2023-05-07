@@ -50,20 +50,22 @@ pub unsafe extern "C" fn create_resources(
 
                 let image = resource.desc.__bindgen_anon_1.image;
 
-                let texture = user_data.device.create_texture(&wgpu::TextureDescriptor {
-                    label: None,
-                    size: wgpu::Extent3d {
-                        width: image.width,
-                        height: image.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: image.mipLevels(),
-                    sample_count: image.sampleCount(),
-                    dimension: wgpu::TextureDimension::D2,
-                    format: map_rps_format_to_wgpu(image.format()),
-                    view_formats: &[map_rps_format_to_wgpu(image.format())],
-                    usage,
-                });
+                let texture = user_data
+                    .device
+                    .create_texture(dbg!(&wgpu::TextureDescriptor {
+                        label: None,
+                        size: wgpu::Extent3d {
+                            width: image.width,
+                            height: image.height,
+                            depth_or_array_layers: image.__bindgen_anon_1.arrayLayers,
+                        },
+                        mip_level_count: image.mipLevels(),
+                        sample_count: image.sampleCount(),
+                        dimension: wgpu::TextureDimension::D2,
+                        format: map_rps_format_to_wgpu(image.format()),
+                        view_formats: &[map_rps_format_to_wgpu(image.format())],
+                        usage,
+                    }));
 
                 resource.allocPlacement.heapId = 0;
                 resource.hRuntimeResource.ptr = Box::into_raw(Box::new(texture)) as _;

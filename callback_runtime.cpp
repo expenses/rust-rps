@@ -11,6 +11,7 @@
 #include "runtime/common/phases/rps_memory_schedule.hpp"
 #include "runtime/common/phases/rps_pre_process.hpp"
 #include "runtime/common/phases/rps_schedule_print.hpp"
+#include "runtime/common/rps_rpsl_host.cpp"
 
 #include <iostream>
 
