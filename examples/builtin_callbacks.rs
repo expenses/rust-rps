@@ -28,6 +28,10 @@ pub unsafe extern "C" fn create_resources(
             continue;
         }
 
+        if !resource.isPendingCreate() {
+            continue;
+        }
+
         let access = resource.allAccesses._base;
 
         let access_flags = AccessFlagBits::from_bits_retain(access.accessFlags as i32);
@@ -36,7 +40,11 @@ pub unsafe extern "C" fn create_resources(
             sys::RpsResourceType::RPS_RESOURCE_TYPE_IMAGE_2D => {
                 let mut usage = wgpu::TextureUsages::empty();
 
-                if access_flags.contains(AccessFlagBits::RENDER_TARGET) {
+                if access_flags.intersects(
+                    AccessFlagBits::RENDER_TARGET
+                        | AccessFlagBits::DEPTH_WRITE
+                        | AccessFlagBits::STENCIL_WRITE,
+                ) {
                     usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
                 }
 

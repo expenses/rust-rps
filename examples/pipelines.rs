@@ -10,7 +10,9 @@ impl RenderPipeline {
         device: &wgpu::Device,
         vertex_shader_filename: &str,
         fragment_shader_filename: &str,
-        format: wgpu::TextureFormat,
+        vertex_buffers: &[wgpu::VertexBufferLayout],
+        targets: &[Option<wgpu::ColorTargetState>],
+        depth_stencil: Option<wgpu::DepthStencilState>,
     ) -> Self {
         let vert_shader_bytes = std::fs::read(vertex_shader_filename).unwrap();
         let frag_shader_bytes = std::fs::read(fragment_shader_filename).unwrap();
@@ -20,13 +22,13 @@ impl RenderPipeline {
         let vert_reflection =
             rspirv_reflect::Reflection::new_from_spirv(&vert_shader_bytes).unwrap();
 
-        let vert_bgl_entries =
+        let (vert_bgl_entries, vert_entry_name) =
             reflection::reflect_bind_group_layout_entries(&vert_reflection, &settings);
 
         let frag_reflection =
             rspirv_reflect::Reflection::new_from_spirv(&frag_shader_bytes).unwrap();
 
-        let frag_bgl_entries =
+        let (frag_bgl_entries, frag_entry_name) =
             reflection::reflect_bind_group_layout_entries(&frag_reflection, &settings);
 
         let (vert_push_constant_info, vert_push_constant_stages) =
@@ -79,26 +81,29 @@ impl RenderPipeline {
         Self {
             bind_group_layouts,
             pipeline: device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
+                label: Some(&format!(
+                    "{} + {}",
+                    vertex_shader_filename, fragment_shader_filename
+                )),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: None,
                         source: wgpu::util::make_spirv(&vert_shader_bytes),
                     }),
-                    entry_point: "VSMain",
-                    buffers: &[],
+                    entry_point: vert_entry_name,
+                    buffers: vertex_buffers,
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: None,
                         source: wgpu::util::make_spirv(&frag_shader_bytes),
                     }),
-                    entry_point: "PSMain",
-                    targets: &[Some(format.into())],
+                    entry_point: frag_entry_name,
+                    targets,
                 }),
                 primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
+                depth_stencil,
                 multisample: wgpu::MultisampleState::default(),
                 multiview: None,
             }),

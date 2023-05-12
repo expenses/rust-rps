@@ -13,6 +13,12 @@ bitflags! {
     pub struct ShaderStages: u32 {
         const VS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_VS as u32;
         const PS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_PS as u32;
+        const GS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_GS as u32;
+        const CS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_CS as u32;
+        const HS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_HS as u32;
+        const RAYTRACING = sys::RpsShaderStageBits::RPS_SHADER_STAGE_RAYTRACING as u32;
+        const AS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_AS as u32;
+        const MS = sys::RpsShaderStageBits::RPS_SHADER_STAGE_MS as u32;
     }
 }
 

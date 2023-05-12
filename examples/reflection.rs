@@ -12,30 +12,34 @@ impl Default for ShaderSettings {
     }
 }
 
-fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> wgpu::ShaderStages {
+fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> (wgpu::ShaderStages, &str) {
     let entry_point_inst = &reflection.0.entry_points[0];
 
     let execution_model = entry_point_inst.operands[0].unwrap_execution_model();
 
-    match execution_model {
+    let entry_name = entry_point_inst.operands[2].unwrap_literal_string();
+
+    let stages = match execution_model {
         rspirv_reflect::rspirv::spirv::ExecutionModel::Vertex => wgpu::ShaderStages::VERTEX,
         rspirv_reflect::rspirv::spirv::ExecutionModel::Fragment => wgpu::ShaderStages::FRAGMENT,
         rspirv_reflect::rspirv::spirv::ExecutionModel::GLCompute => wgpu::ShaderStages::COMPUTE,
         other => unimplemented!("{:?}", other),
-    }
+    };
+
+    (stages, entry_name)
 }
 
-pub fn reflect_bind_group_layout_entries(
-    reflection: &rspirv_reflect::Reflection,
+pub fn reflect_bind_group_layout_entries<'a>(
+    reflection: &'a rspirv_reflect::Reflection,
     settings: &ShaderSettings,
-) -> BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>> {
-    let shader_stages = reflect_shader_stages(reflection);
+) -> (BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>, &'a str) {
+    let (shader_stages, entry_name) = reflect_shader_stages(reflection);
 
     let descriptor_sets = reflection
         .get_descriptor_sets()
         .expect("Failed to get descriptor sets for shader reflection");
 
-    descriptor_sets
+    let sets = descriptor_sets
         .iter()
         .map(|(location, set)| {
             let entries = set
@@ -90,7 +94,9 @@ pub fn reflect_bind_group_layout_entries(
 
             (*location, entries)
         })
-        .collect()
+        .collect();
+
+    (sets, entry_name)
 }
 
 pub fn merge_bind_group_layout_entries(
