@@ -1,24 +1,25 @@
-use crate::{
-    mapping::{array_ref_to_mut_slice, map_rps_format_to_wgpu, vector_to_slice, AccessFlagBits},
-    rps, BorrowedOrOwned, CommandBuffer, Resource, UserData,
+use crate::{map_rps_format_to_wgpu, BorrowedOrOwned, CommandBuffer, Resource, UserData};
+use rps::{
+    mapping::{array_ref_to_mut_slice, AccessFlagBits},
+    sys, CmdCallbackContext,
 };
 use std::ffi::c_void;
 
 pub unsafe extern "C" fn create_command_resources(
     _context: *const c_void,
     _user_data: *mut c_void,
-) -> rps::RpsResult {
-    rps::RpsResult::RPS_OK
+) -> sys::RpsResult {
+    sys::RpsResult::RPS_OK
 }
 
 pub unsafe extern "C" fn create_resources(
     _context: *const c_void,
     array: *mut c_void,
     user_data: *mut c_void,
-) -> rps::RpsResult {
+) -> sys::RpsResult {
     let user_data = &mut *(user_data as *mut UserData);
 
-    let arr = array as *mut rps::rps::ArrayRef<rps::rps::ResourceInstance, u64>;
+    let arr = array as *mut sys::rps::ArrayRef<sys::rps::ResourceInstance, u64>;
 
     let resources = unsafe { array_ref_to_mut_slice(&mut *arr) };
 
@@ -32,7 +33,7 @@ pub unsafe extern "C" fn create_resources(
         let access_flags = AccessFlagBits::from_bits_retain(access.accessFlags as i32);
 
         match resource.desc.type_() {
-            rps::root::RpsResourceType::RPS_RESOURCE_TYPE_IMAGE_2D => {
+            sys::RpsResourceType::RPS_RESOURCE_TYPE_IMAGE_2D => {
                 let mut usage = wgpu::TextureUsages::empty();
 
                 if access_flags.contains(AccessFlagBits::RENDER_TARGET) {
@@ -74,14 +75,14 @@ pub unsafe extern "C" fn create_resources(
         }
     }
 
-    rps::RpsResult::RPS_OK
+    sys::RpsResult::RPS_OK
 }
 
 pub unsafe extern "C" fn destroy_runtime_resource_deferred(
     resource: *mut c_void,
     _user_data: *mut c_void,
 ) {
-    let mut resource = &mut *(resource as *mut rps::rps::ResourceInstance);
+    let mut resource = &mut *(resource as *mut sys::rps::ResourceInstance);
 
     debug_assert!(!resource.isExternal());
 
@@ -90,24 +91,17 @@ pub unsafe extern "C" fn destroy_runtime_resource_deferred(
     resource.hRuntimeResource.ptr = std::ptr::null_mut();
 }
 
-pub unsafe extern "C" fn clear_color(context: *const rps::RpsCmdCallbackContext) {
-    let context = *(context as *const rps::rps::RuntimeCmdCallbackContext);
+pub unsafe extern "C" fn clear_color(context: *const sys::RpsCmdCallbackContext) {
+    let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context);
 
-    let resource_cache = &(*context.pRenderGraph).m_resourceCache;
-    let resources = vector_to_slice(resource_cache);
+    //dbg!(image_view);
 
-    let base_context = context._base;
+    let image_view = context.reinterpret_arg_as::<sys::RpsImageView>(0);
 
-    let command_buffer = unsafe { &mut *(base_context.hCommandBuffer.ptr as *mut CommandBuffer) };
-
-    let args = std::slice::from_raw_parts(base_context.ppArgs, base_context.numArgs as usize);
-
-    let image_view = *(args[0] as *const rps::RpsImageView);
-
-    let clear_value = *(args[1] as *const rps::RpsClearValue);
+    let clear_value = context.reinterpret_arg_as::<sys::RpsClearValue>(1);
     let clear_value = clear_value.color.float32;
 
-    let resource = resources[image_view.base.resourceId as usize]
+    let resource = context.resources[image_view.base.resourceId as usize]
         .hRuntimeResource
         .ptr;
     let resource = &*(resource as *const Resource);
@@ -120,7 +114,8 @@ pub unsafe extern "C" fn clear_color(context: *const rps::RpsCmdCallbackContext)
         Resource::SurfaceFrame(texture_view) => BorrowedOrOwned::Borrowed(texture_view),
     };
 
-    command_buffer
+    context
+        .command_buffer
         .encoder
         .as_mut()
         .unwrap()

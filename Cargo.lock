@@ -1179,6 +1179,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "216080ab382b992234dda86873c18d4c48358f5cfcb70fd693d7f6f2131b628b"
 
 [[package]]
+name = "rps"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "bitflags 2.2.1",
+ "bytemuck",
+ "cmake",
+ "libloading 0.8.0",
+ "pollster",
+ "rspirv-reflect",
+ "structopt",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "rspirv"
 version = "0.11.0+1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1197,22 +1213,6 @@ checksum = "b9b81fec864410642a101e18ea08bed825287d5b0ca7852b8c9605b2b1b15557"
 dependencies = [
  "rspirv",
  "thiserror",
-]
-
-[[package]]
-name = "rust-rps"
-version = "0.1.0"
-dependencies = [
- "bindgen",
- "bitflags 2.2.1",
- "bytemuck",
- "cmake",
- "libloading 0.8.0",
- "pollster",
- "rspirv-reflect",
- "structopt",
- "wgpu",
- "winit",
 ]
 
 [[package]]
