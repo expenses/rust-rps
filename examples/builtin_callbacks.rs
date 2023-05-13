@@ -1,25 +1,22 @@
 use crate::{map_rps_format_to_wgpu, BorrowedOrOwned, CommandBuffer, Resource, UserData};
-use rps::{
-    mapping::{array_ref_to_mut_slice, AccessFlagBits},
-    sys, CmdCallbackContext,
-};
+use rps_custom_backend::{array_ref_to_mut_slice, ffi, rps::{self, AccessFlags, ResourceType}, CmdCallbackContext};
 use std::ffi::c_void;
 
 pub unsafe extern "C" fn create_command_resources(
     _context: *const c_void,
     _user_data: *mut c_void,
-) -> sys::RpsResult {
-    sys::RpsResult::RPS_OK
+) -> ffi::RpsResult {
+    rps::Result::OK.into_raw()
 }
 
 pub unsafe extern "C" fn create_resources(
     _context: *const c_void,
     array: *mut c_void,
     user_data: *mut c_void,
-) -> sys::RpsResult {
+) -> ffi::RpsResult {
     let user_data = &mut *(user_data as *mut UserData);
 
-    let arr = array as *mut sys::rps::ArrayRef<sys::rps::ResourceInstance, u64>;
+    let arr = array as *mut ffi::cpp::ArrayRef<ffi::cpp::ResourceInstance, u64>;
 
     let resources = unsafe { array_ref_to_mut_slice(&mut *arr) };
 
@@ -34,21 +31,23 @@ pub unsafe extern "C" fn create_resources(
 
         let access = resource.allAccesses._base;
 
-        let access_flags = AccessFlagBits::from_bits_retain(access.accessFlags as i32);
+        let access: rps::AccessAttr = std::mem::transmute(access);
 
-        match resource.desc.type_() {
-            sys::RpsResourceType::RPS_RESOURCE_TYPE_IMAGE_2D => {
+        let access_flags = access.access_flags;
+
+        match ResourceType::from_raw(resource.desc.type_()) {
+            ResourceType::IMAGE_2D => {
                 let mut usage = wgpu::TextureUsages::empty();
 
                 if access_flags.intersects(
-                    AccessFlagBits::RENDER_TARGET
-                        | AccessFlagBits::DEPTH_WRITE
-                        | AccessFlagBits::STENCIL_WRITE,
+                    AccessFlags::RENDER_TARGET
+                        | AccessFlags::DEPTH_WRITE
+                        | AccessFlags::STENCIL_WRITE,
                 ) {
                     usage |= wgpu::TextureUsages::RENDER_ATTACHMENT;
                 }
 
-                if access_flags.contains(AccessFlagBits::SHADER_RESOURCE) {
+                if access_flags.contains(AccessFlags::SHADER_RESOURCE) {
                     usage |= wgpu::TextureUsages::TEXTURE_BINDING;
                 }
 
@@ -69,13 +68,15 @@ pub unsafe extern "C" fn create_resources(
                     mip_level_count: image.mipLevels(),
                     sample_count: image.sampleCount(),
                     dimension: wgpu::TextureDimension::D2,
-                    format: map_rps_format_to_wgpu(image.format()),
-                    view_formats: &[map_rps_format_to_wgpu(image.format())],
+                    format: map_rps_format_to_wgpu(rps::Format::from_raw(image.format())),
+                    view_formats: &[map_rps_format_to_wgpu(rps::Format::from_raw(
+                        image.format(),
+                    ))],
                     usage,
                 });
 
                 resource.allocPlacement.heapId = 0;
-                resource.hRuntimeResource.ptr = Box::into_raw(Box::new(texture)) as _;
+                resource.hRuntimeResource.ptr = Box::into_raw(Box::new(Resource::Texture(texture))) as _;
                 resource.prevFinalAccess = resource.initialAccess;
                 resource.set_isPendingCreate(false);
             }
@@ -83,30 +84,26 @@ pub unsafe extern "C" fn create_resources(
         }
     }
 
-    sys::RpsResult::RPS_OK
+    rps::Result::OK.into_raw()
 }
 
 pub unsafe extern "C" fn destroy_runtime_resource_deferred(
     resource: *mut c_void,
     _user_data: *mut c_void,
 ) {
-    let mut resource = &mut *(resource as *mut sys::rps::ResourceInstance);
-
-    debug_assert!(!resource.isExternal());
+    let mut resource = &mut *(resource as *mut ffi::cpp::ResourceInstance);
 
     let _ = Box::from_raw(resource.hRuntimeResource.ptr as *mut Resource);
 
     resource.hRuntimeResource.ptr = std::ptr::null_mut();
 }
 
-pub unsafe extern "C" fn clear_color(context: *const sys::RpsCmdCallbackContext) {
-    let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context);
+pub unsafe extern "C" fn clear_color(context: *const ffi::RpsCmdCallbackContext) {
+    let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context as _);
 
-    //dbg!(image_view);
+    let image_view = context.reinterpret_arg_as::<ffi::RpsImageView>(0);
 
-    let image_view = context.reinterpret_arg_as::<sys::RpsImageView>(0);
-
-    let clear_value = context.reinterpret_arg_as::<sys::RpsClearValue>(1);
+    let clear_value = context.reinterpret_arg_as::<ffi::RpsClearValue>(1);
     let clear_value = clear_value.color.float32;
 
     let resource = context.resources[image_view.base.resourceId as usize]

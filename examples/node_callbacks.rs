@@ -1,12 +1,11 @@
 use crate::{BorrowedOrOwned, CommandBuffer, Resource, UserData};
-use glam::{Mat4, Vec3};
-use rps::sys;
-use rps::CmdCallbackContext;
+use glam::Mat4;
+use rps_custom_backend::{ffi, rps, CmdCallbackContext};
 
-pub unsafe extern "C" fn draw_triangle(context: *const sys::RpsCmdCallbackContext) {
+pub unsafe extern "C" fn draw_triangle(context: *const rps::CmdCallbackContext) {
     let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context);
 
-    let image_view = *(context.args[0] as *const sys::RpsImageView);
+    let image_view = *(context.args[0] as *const ffi::RpsImageView);
 
     let resource = context.resources[image_view.base.resourceId as usize]
         .hRuntimeResource
@@ -43,13 +42,13 @@ pub unsafe extern "C" fn draw_triangle(context: *const sys::RpsCmdCallbackContex
     render_pass.draw(0..3, 0..1);
 }
 
-pub unsafe extern "C" fn geometry_pass(context: *const sys::RpsCmdCallbackContext) {
+pub unsafe extern "C" fn geometry_pass(context: *const rps::CmdCallbackContext) {
     let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context);
 
-    let image_view = context.reinterpret_arg_as::<sys::RpsImageView>(0);
+    let image_view = context.reinterpret_arg_as::<ffi::RpsImageView>(0);
     let mut aspect_ratio = *context.reinterpret_arg_as::<f32>(1);
     let time = *context.reinterpret_arg_as::<f32>(2);
-    let viewport = *context.reinterpret_arg_as::<sys::RpsViewport>(3);
+    let viewport = *context.reinterpret_arg_as::<ffi::RpsViewport>(3);
 
     aspect_ratio *= time.sin().abs();
 
@@ -102,18 +101,22 @@ pub unsafe extern "C" fn geometry_pass(context: *const sys::RpsCmdCallbackContex
     render_pass.draw(0..3, 0..1);
 }
 
-pub unsafe extern "C" fn upscale(context: *const sys::RpsCmdCallbackContext) {
+pub unsafe extern "C" fn upscale(context: *const rps::CmdCallbackContext) {
     let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context);
 
-    let dest = context.reinterpret_arg_as::<sys::RpsImageView>(0);
-    let source = context.reinterpret_arg_as::<sys::RpsImageView>(1);
+    let dest = context.reinterpret_arg_as::<ffi::RpsImageView>(0);
+    let source = context.reinterpret_arg_as::<ffi::RpsImageView>(1);
 
-    let mut source_res = context.resources[source.base.resourceId as usize].hRuntimeResource;
-    let mut dest_res = context.resources[dest.base.resourceId as usize].hRuntimeResource;
+    let source_res = context.resources[source.base.resourceId as usize]
+        .hRuntimeResource
+        .ptr;
+    let dest_res = context.resources[dest.base.resourceId as usize]
+        .hRuntimeResource
+        .ptr;
 
-    let source_res = &*(source_res.ptr as *const Resource);
+    let source_res = &*(source_res as *const Resource);
 
-    let dest_res = &*(dest_res.ptr as *const Resource);
+    let dest_res = &*(dest_res as *const Resource);
 
     let source_tex_view = match source_res {
         Resource::Texture(texture) => {
@@ -172,19 +175,20 @@ pub unsafe extern "C" fn upscale(context: *const sys::RpsCmdCallbackContext) {
     render_pass.draw(0..3, 0..1);
 }
 
-pub unsafe extern "C" fn draw(context: *const sys::RpsCmdCallbackContext) {
+pub unsafe extern "C" fn draw(context: *const rps::CmdCallbackContext) {
     let context = CmdCallbackContext::<CommandBuffer, UserData>::new(context);
 
-    let image_view = *(context.args[0] as *const sys::RpsImageView);
-    let depth_view = *(context.args[1] as *const sys::RpsImageView);
+    let image_view = *(context.args[0] as *const ffi::RpsImageView);
+    let depth_view = *(context.args[1] as *const ffi::RpsImageView);
 
-    let image_res = context.resources[image_view.base.resourceId as usize];
+    let image_res = &context.resources[image_view.base.resourceId as usize];
 
     let img_desc = image_res.desc.__bindgen_anon_1.image;
 
     let resource = context.resources[image_view.base.resourceId as usize]
         .hRuntimeResource
         .ptr;
+
     let resource = &*(resource as *const Resource);
 
     let texture_view = match resource {
@@ -198,6 +202,7 @@ pub unsafe extern "C" fn draw(context: *const sys::RpsCmdCallbackContext) {
     let resource = context.resources[depth_view.base.resourceId as usize]
         .hRuntimeResource
         .ptr;
+
     let resource = &*(resource as *const Resource);
 
     let depth_texture_view = match resource {

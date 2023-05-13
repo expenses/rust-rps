@@ -1,10 +1,34 @@
-fn main() {
-    let rps_lib_dir = cmake::Config::new("RenderPipelineShaders")
-        .build_target("all")
-        .build()
-        .join("build")
-        .join("src");
+#[derive(Debug)]
+struct BindgenCallbacks;
 
+impl bindgen::callbacks::ParseCallbacks for BindgenCallbacks {
+    fn process_comment(&self, comment: &str) -> Option<String> {
+        if comment.contains("```") {
+            let mut new = String::new();
+            let mut first = true;
+            let mut start_comment = false;
+
+            for section in comment.split("```") {
+                if !first {
+                    if start_comment {
+                        new.push_str("```text")
+                    } else {
+                        new.push_str("```");
+                    }
+                }
+                start_comment = !start_comment;
+                first = false;
+                new.push_str(section);
+            }
+
+            Some(new)
+        } else {
+            None
+        }
+    }
+}
+
+fn main() {
     let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
     let source_file = "callback_runtime.cpp";
@@ -13,20 +37,56 @@ fn main() {
 
     let bindings = bindgen::Builder::default()
         .header(source_file)
+        .module_raw_line("root", "pub use render_pipeline_shaders_sys::*;")
+        // Make std opaque and blocklisted.
         .opaque_type("std::.*")
-        .allowlist_function("add_callback_runtime")
-        .allowlist_function("rps[^:]*")
-        .allowlist_type("rps[^:]*")
-        .allowlist_type("Rps.*")
-        .allowlist_type("PFN.*")
-        .allowlist_type("rps::RenderGraphUpdateContext")
+        .blocklist_type("std::.*")
+        // Add custom types
         .allowlist_type("Callbacks")
-        .opaque_type("rps::Arena")
-        .opaque_type(".*Pool.*")
-        // This inherits from ParamDecl and is thus pretty broken.
+        .allowlist_function("add_callback_runtime")
+        // Add rps c++ types
+        .allowlist_function("rps::.*")
+        .allowlist_type("rps::.*")
+        // Exceptions to the above
+        .opaque_type(".*FreeListPool.*")
         .opaque_type("rps::NodeParamDecl")
-        .rustified_enum("Rps.*")
-        .enable_cxx_namespaces()
+        .blocklist_type("rps::.*iterator")
+        // Make rps c types opaque and blocklist c functions
+        .opaque_type("Rps.*")
+        .blocklist_function("rps.*")
+        // Blocklist all types that would become typedefs.
+        // Some C++ types inherit from the C types so we can't blocklist
+        // those.
+        .blocklist_type("RpsRuntimeResource")
+        .blocklist_type("RpsSubprogram")
+        .blocklist_type("RpsRuntimeHeap")
+        .blocklist_type("RpsRuntimeCommandBuffer")
+        .blocklist_type("RpsParamAttrList")
+        .blocklist_type("RpsScheduleFlags")
+        .blocklist_type("RpsNodeDeclFlags")
+        .blocklist_type("RpsParameterFlags")
+        .blocklist_type("RpsNodeFlags")
+        .blocklist_type("RpsQueueFlags")
+        .blocklist_type("RpsRuntimeRenderPassFlags")
+        .blocklist_type("RpsBool")
+        .blocklist_type("RpsDevice")
+        .blocklist_type("RpsNodeDeclId")
+        .blocklist_type("RpsParamId")
+        .blocklist_type("RpsNodeId")
+        .blocklist_type("RpsVariable")
+        .blocklist_type("RpsConstant")
+        .blocklist_type("RpsSubgraphFlags")
+        .blocklist_type("RpslEntryCallFlags")
+        .blocklist_type("RpsResourceId")
+        .blocklist_type("RpsResourceFlags")
+        .blocklist_type("RpsRuntimeRenderPassFlags")
+        .blocklist_type("RpsImageAspectUsageFlags")
+        .blocklist_type("RpsAccessFlags")
+        .blocklist_type("RpsShaderStageFlags")
+        .blocklist_type("RpsResourceViewFlags")
+        .blocklist_type("RpsRecordCommandFlags")
+        .blocklist_type("RpsRenderGraphDiagnosticInfoFlags")
+        //
         .clang_args([
             "-I",
             "RenderPipelineShaders/include",
@@ -36,8 +96,8 @@ fn main() {
             "-x",
             "c++",
         ])
-        .impl_debug(true)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .enable_cxx_namespaces()
+        .parse_callbacks(Box::new(BindgenCallbacks))
         .generate()
         .expect("Unable to generate bindings");
 
@@ -45,21 +105,18 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
-    println!("cargo:rustc-link-search={}", rps_lib_dir.display());
     println!("cargo:rustc-link-search={}", out_path.display());
-
     println!("cargo:rustc-link-lib=callback_runtime");
-    println!("cargo:rustc-link-lib=rps_runtime");
-    println!("cargo:rustc-link-lib=rps_core");
-    println!("cargo:rustc-link-lib=stdc++");
 
     println!("cargo:rerun-if-changed={}", source_file);
+    println!("cargo:rerun-if-changed=RenderPipelineShaders");
 
     if !std::process::Command::new("clang")
         .arg("-c")
         .arg("-o")
         .arg(&object_file)
         .arg(source_file)
+        .arg("-g")
         .arg("-IRenderPipelineShaders/src")
         .arg("-IRenderPipelineShaders/include")
         .output()
