@@ -9,7 +9,6 @@ render-pipeline-shaders-sys = { git = "https://github.com/expenses/render-pipeli
 
 [dev-dependencies]
 pollster = "0.3.0"
-rspirv-reflect = "0.7.0"
 structopt = "0.3.26"
 wgpu = { version = "0.16.0", features = ["spirv"] }
 winit = "0.28.4"
@@ -20,6 +19,11 @@ glam = { version = "0.23.0", features = ["bytemuck"] }
 anyhow = "1.0.71"
 dolly = "0.4.1"
 libloading = "0.8.0"
+spirq = "0.6.3"
+spirv = "0.2.0"
+ktx2 = "0.3.0"
+zstd = "0.12.3"
+hassle-rs = "0.10.0"
 
 [build-dependencies]
-bindgen = "0.65.1"
+bindgen = { path = "../rust-bindgen/bindgen"}

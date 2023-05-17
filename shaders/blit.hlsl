@@ -7,6 +7,7 @@ struct V2P
 
 #define PI (3.14159f)
 
+[shader("vertex")]
 V2P VSMain(uint vId : SV_VertexID)
 {
     float2 uv = float2((vId << 1) & 2, vId & 2);
@@ -18,7 +19,8 @@ V2P VSMain(uint vId : SV_VertexID)
 
 [[vk::binding(0)]] Texture2D<float3> source_tex;
 [[vk::binding(1)]] SamplerState samp;
- 
+
+[shader("pixel")]
 float4 PSMain(V2P psIn) : SV_Target0
 {
     return float4(source_tex.Sample(samp, psIn.Uv), 1.0);

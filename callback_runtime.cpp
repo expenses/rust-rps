@@ -19,9 +19,14 @@ struct Callbacks {
   RpsResult (*create_resources)(const void *context, void *array,
                                 void *user_data);
 
+  RpsResult (*record_commands)(
+      const void *render_graph,
+      const RpsRenderGraphRecordCommandInfo &record_info);
+
   void (*destroy_runtime_resource_deferred)(void *resource, void *user_data);
 
   PFN_rpsCmdCallback clear_color;
+  PFN_rpsCmdCallback clear_depth_stencil;
 };
 
 namespace rps {
@@ -30,7 +35,8 @@ public:
   Callbacks m_callbacks;
   void *m_user_data;
 
-  CallbackBackend(RenderGraph &renderGraph, Callbacks callbacks, void *user_data)
+  CallbackBackend(RenderGraph &renderGraph, Callbacks callbacks,
+                  void *user_data)
       : RuntimeBackend(renderGraph) {
     m_callbacks = callbacks;
     m_user_data = user_data;
@@ -60,7 +66,7 @@ private:
 };
 
 RpsResult CallbackBackend::CreateHeaps(const RenderGraphUpdateContext &context,
-                                ArrayRef<HeapInfo> heaps) {
+                                       ArrayRef<HeapInfo> heaps) {
   for (HeapInfo &heapInfo : heaps) {
     if (heapInfo.hRuntimeHeap == RPS_NULL_HANDLE) {
       // Set dummy heap handle
@@ -78,6 +84,9 @@ CallbackBackend::~CallbackBackend() {}
 RpsResult CallbackBackend::RecordCommands(
     const RenderGraph &renderGraph,
     const RpsRenderGraphRecordCommandInfo &recordInfo) const {
+  // not fully implemented yet.
+  // m_callbacks.record_commands((const void*)&renderGraph, recordInfo);
+
   // Fallback cmd recording for null runtime and missing runtimes
   RuntimeCmdCallbackContext cmdCbCtx{this, recordInfo};
 
@@ -113,17 +122,19 @@ RpsResult CallbackBackend::RecordCommands(
   return RPS_OK;
 }
 
-void CallbackBackend::DestroyRuntimeResourceDeferred(ResourceInstance &resource) {
+void CallbackBackend::DestroyRuntimeResourceDeferred(
+    ResourceInstance &resource) {
   return m_callbacks.destroy_runtime_resource_deferred(&resource, m_user_data);
 }
 
-RpsResult
-CallbackBackend::CreateCommandResources(const RenderGraphUpdateContext &context) {
+RpsResult CallbackBackend::CreateCommandResources(
+    const RenderGraphUpdateContext &context) {
   return m_callbacks.create_command_resources(&context, m_user_data);
 }
 
-RpsResult CallbackBackend::CreateResources(const RenderGraphUpdateContext &context,
-                                    ArrayRef<ResourceInstance> resources) {
+RpsResult
+CallbackBackend::CreateResources(const RenderGraphUpdateContext &context,
+                                 ArrayRef<ResourceInstance> resources) {
   return m_callbacks.create_resources(&context, &resources, m_user_data);
 }
 
@@ -369,8 +380,8 @@ public:
     // RPS_V_RETURN(renderGraph.AddPhase<MemorySchedulePhase>(renderGraph));
     RPS_V_RETURN(renderGraph.AddPhase<ScheduleDebugPrintPhase>());
 
-    RPS_V_RETURN(
-        renderGraph.AddPhase<CallbackBackend>(renderGraph, m_callbacks, m_user_data));
+    RPS_V_RETURN(renderGraph.AddPhase<CallbackBackend>(renderGraph, m_callbacks,
+                                                       m_user_data));
 
     return RPS_OK;
   }
@@ -424,8 +435,8 @@ public:
 ConstArrayRef<BuiltInNodeInfo> CallbackRuntimeDevice::GetBuiltInNodes() const {
   static const BuiltInNodeInfo c_builtInNodes[] = {
       {"clear_color", {m_callbacks.clear_color, nullptr}},
+      {"clear_depth_stencil", {m_callbacks.clear_depth_stencil, nullptr}},
       //{"clear_color_regions", {&VKBuiltInClearColorRegions, nullptr}},
-      //{"clear_depth_stencil", {&VKBuiltInClearDepthStencil, nullptr}},
       //{"clear_depth_stencil_regions", {&VKBuiltInClearDepthStencilRegions,
       // nullptr}},
       //{"clear_texture", {&VKBuiltInClearTextureUAV, nullptr}},
@@ -444,11 +455,9 @@ ConstArrayRef<BuiltInNodeInfo> CallbackRuntimeDevice::GetBuiltInNodes() const {
 
 extern "C" {
 RpsResult add_callback_runtime(const RpsDeviceCreateInfo *device_create_info,
-                     RpsDevice *phDevice, Callbacks callbacks,
-                     void *user_data) {
+                               RpsDevice *phDevice, Callbacks callbacks,
+                               void *user_data) {
   return rps::RuntimeDevice::Create<rps::CallbackRuntimeDevice>(
-      phDevice,
-      device_create_info,
-      callbacks, user_data);
+      phDevice, device_create_info, callbacks, user_data);
 }
 }

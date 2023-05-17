@@ -1,122 +1,135 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-pub struct ShaderSettings {
-    pub allow_texture_filtering: bool,
+fn map_dim(dim: spirv::Dim) -> wgpu::TextureViewDimension {
+    match dim {
+        spirv::Dim::Dim2D => wgpu::TextureViewDimension::D2,
+        spirv::Dim::Dim3D => wgpu::TextureViewDimension::D3,
+        spirv::Dim::DimCube => wgpu::TextureViewDimension::Cube,
+        other => panic!("{:?}", other),
+    }
 }
 
-impl Default for ShaderSettings {
+#[derive(Clone)]
+pub struct ReflectionSettings {
+    pub sampled_texture_sample_type: wgpu::TextureSampleType
+}
+
+impl Default for ReflectionSettings {
     fn default() -> Self {
         Self {
-            allow_texture_filtering: true,
+            sampled_texture_sample_type: wgpu::TextureSampleType::Float { filterable: true }
         }
     }
 }
 
-fn reflect_shader_stages(reflection: &rspirv_reflect::Reflection) -> (wgpu::ShaderStages, &str) {
-    let entry_point_inst = &reflection.0.entry_points[0];
-
-    let execution_model = entry_point_inst.operands[0].unwrap_execution_model();
-
-    let entry_name = entry_point_inst.operands[2].unwrap_literal_string();
-
-    let stages = match execution_model {
-        rspirv_reflect::rspirv::spirv::ExecutionModel::Vertex => wgpu::ShaderStages::VERTEX,
-        rspirv_reflect::rspirv::spirv::ExecutionModel::Fragment => wgpu::ShaderStages::FRAGMENT,
-        rspirv_reflect::rspirv::spirv::ExecutionModel::GLCompute => wgpu::ShaderStages::COMPUTE,
-        other => unimplemented!("{:?}", other),
-    };
-
-    (stages, entry_name)
+pub struct Reflection {
+    pub bindings: BTreeMap<u32, BTreeMap<u32, wgpu::BindGroupLayoutEntry>>,
+    pub entry_points: Vec<spirq::EntryPoint>,
+    pub max_push_constant_size: usize,
 }
 
-pub fn reflect_bind_group_layout_entries<'a>(
-    reflection: &'a rspirv_reflect::Reflection,
-    settings: &ShaderSettings,
-) -> (BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>, &'a str) {
-    let (shader_stages, entry_name) = reflect_shader_stages(reflection);
+pub fn reflect(bytes: &[u8], settings: &ReflectionSettings) -> Reflection {
+    let entry_points = spirq::ReflectConfig::new().spv(bytes).reflect().unwrap();
 
-    let descriptor_sets = reflection
-        .get_descriptor_sets()
-        .expect("Failed to get descriptor sets for shader reflection");
+    let mut settings = settings.clone();
 
-    let sets = descriptor_sets
-        .iter()
-        .map(|(location, set)| {
-            let entries = set
-                .iter()
-                .map(|(&binding, info)| wgpu::BindGroupLayoutEntry {
-                    binding,
-                    visibility: shader_stages,
-                    count: match info.binding_count {
-                        rspirv_reflect::BindingCount::One => None,
-                        rspirv_reflect::BindingCount::StaticSized(size) => {
-                            Some(std::num::NonZeroU32::new(size as u32).expect("size is 0"))
-                        }
-                        rspirv_reflect::BindingCount::Unbounded => {
-                            unimplemented!("No good way to handle unbounded binding counts yet.")
-                        }
-                    },
-                    ty: match info.ty {
-                        rspirv_reflect::DescriptorType::UNIFORM_BUFFER => {
-                            wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            }
-                        }
-                        rspirv_reflect::DescriptorType::SAMPLER => {
-                            wgpu::BindingType::Sampler(if settings.allow_texture_filtering {
-                                wgpu::SamplerBindingType::Filtering
-                            } else {
-                                wgpu::SamplerBindingType::NonFiltering
-                            })
-                        }
-                        rspirv_reflect::DescriptorType::SAMPLED_IMAGE => {
-                            wgpu::BindingType::Texture {
-                                sample_type: wgpu::TextureSampleType::Float {
-                                    filterable: settings.allow_texture_filtering,
+    let mut bindings: BTreeMap<u32, BTreeMap<u32, wgpu::BindGroupLayoutEntry>> = BTreeMap::new();
+    let mut max_push_constant_size = 0;
+
+    for entry_point in &entry_points {
+        let shader_stage = match entry_point.exec_model {
+            spirq::ExecutionModel::Vertex => wgpu::ShaderStages::VERTEX,
+            spirq::ExecutionModel::Fragment => wgpu::ShaderStages::FRAGMENT,
+            spirq::ExecutionModel::GLCompute => wgpu::ShaderStages::COMPUTE,
+            other => panic!("{:?}", other),
+        };
+
+        for var in &entry_point.vars {
+            match &var {
+                spirq::reflect::Variable::Descriptor {
+                desc_bind,
+                desc_ty,
+                ty,
+                nbind,
+                ..
+            } =>
+            {
+                let set_bindings = bindings.entry(desc_bind.set()).or_default();
+                let binding = set_bindings.entry(desc_bind.bind()).or_insert_with(|| {
+                    wgpu::BindGroupLayoutEntry {
+                        binding: desc_bind.bind(),
+                        visibility: shader_stage,
+                        ty: match (ty, desc_ty) {
+                            (spirq::ty::Type::SampledImage(ty), spirq::reflect::DescriptorType::SampledImage()) => wgpu::BindingType::Texture {
+                                multisampled: ty.is_multisampled,
+                                sample_type: match &ty.scalar_ty {
+                                    spirq::ty::ScalarType::Float(4) => {
+                                        let ty = settings.sampled_texture_sample_type;
+                                        settings = Default::default();
+                                        ty
+                                    },
+                                    other => panic!("{:?}", other),
                                 },
-                                view_dimension: wgpu::TextureViewDimension::D2,
-                                multisampled: false,
+                                view_dimension: map_dim(ty.dim),
+                            },
+                            (spirq::ty::Type::StorageImage(ty), spirq::reflect::DescriptorType::StorageImage(access)) => {
+                                wgpu::BindingType::StorageTexture {
+                                    view_dimension: map_dim(ty.dim),
+                                    format: match ty.fmt {
+                                        spirq::ty::ImageFormat::Rgba16f => wgpu::TextureFormat::Rgba16Float,
+                                        spirq::ty::ImageFormat::R16f => wgpu::TextureFormat::R16Float,
+                                        other => panic!("{:?}", other),
+                                    },
+                                    access: match access {
+                                        spirq::reflect::AccessType::ReadWrite => wgpu::StorageTextureAccess::ReadWrite,
+                                        other => panic!("{:?}", other),
+                                    },
+                                }
                             }
-                        }
-                        rspirv_reflect::DescriptorType::STORAGE_BUFFER => {
-                            wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
+                            (spirq::ty::Type::Sampler(), spirq::reflect::DescriptorType::Sampler()) => {
+                                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
                             }
-                        }
-                        _ => unimplemented!("{:?}", info.ty),
-                    },
-                })
-                .collect();
+                            other => panic!("{:?}", other),
+                        },
+                        count: if *nbind > 1 {
+                            Some(std::num::NonZeroU32::new(*nbind).unwrap())
+                        } else {
+                            None
+                        },
+                    }
+                });
 
-            (*location, entries)
-        })
-        .collect();
+                binding.visibility |= shader_stage;
+            },
+            spirq::reflect::Variable::PushConstant {
+                ty,
+                ..
+            } => {
+                max_push_constant_size = max_push_constant_size.max(ty.nbyte().unwrap_or(0));
+            },
+            _ => {}
+        }
+        }
+    }
 
-    (sets, entry_name)
+    Reflection {
+        bindings,
+        entry_points,
+        max_push_constant_size
+    }
 }
-
 pub fn merge_bind_group_layout_entries(
-    a: &BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>,
-    b: &BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>>,
-) -> BTreeMap<u32, Vec<wgpu::BindGroupLayoutEntry>> {
+    a: &BTreeMap<u32, BTreeMap<u32, wgpu::BindGroupLayoutEntry>>,
+    b: &BTreeMap<u32, BTreeMap<u32, wgpu::BindGroupLayoutEntry>>,
+) -> BTreeMap<u32, BTreeMap<u32, wgpu::BindGroupLayoutEntry>> {
     let mut output = a.clone();
 
     for (location, entries) in b {
         let merged = output.entry(*location).or_default();
 
-        for merging_entry in entries {
-            if let Some(entry) = merged
-                .iter_mut()
-                .find(|entry| entry.binding == merging_entry.binding)
-            {
-                entry.visibility |= merging_entry.visibility;
-            } else {
-                merged.push(*merging_entry);
-            }
+        for (binding, merging_entry) in entries {
+            let mut entry = merged.entry(*binding).or_insert_with(|| *merging_entry);
+            entry.visibility |= merging_entry.visibility;
         }
     }
 

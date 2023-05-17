@@ -1,5 +1,45 @@
+use std::collections::HashMap;
+
 #[derive(Debug)]
-struct BindgenCallbacks;
+struct BindgenCallbacks {
+    item_replacements: HashMap<&'static str, &'static str>,
+    field_name_replacements: HashMap<(&'static str, &'static str), &'static str>,
+}
+
+impl BindgenCallbacks {
+    fn new() -> Self {
+        let mut item_replacements = HashMap::new();
+        item_replacements.insert(
+            "ResourceDescPacked__bindgen_ty_1",
+            "ResourceBufferImageDescPacked",
+        );
+        item_replacements.insert(
+            "ResourceDescPacked__bindgen_ty_1__bindgen_ty_1",
+            "ResourceImageDescPacked",
+        );
+        item_replacements.insert(
+            "ResourceDescPacked__bindgen_ty_1__bindgen_ty_2",
+            "ResourceBufferDescPacked",
+        );
+        item_replacements.insert(
+            "ResourceDescPacked__bindgen_ty_1__bindgen_ty_1__bindgen_ty_1",
+            "ResourceImageDepthArrayLayersDescPacked",
+        );
+
+        let mut field_name_replacements = HashMap::new();
+
+        field_name_replacements.insert(("ResourceDescPacked", "__bindgen_anon_1"), "buffer_image");
+        field_name_replacements.insert(
+            ("ResourceImageDescPacked", "__bindgen_anon_1"),
+            "depth_array_layers",
+        );
+
+        Self {
+            item_replacements,
+            field_name_replacements,
+        }
+    }
+}
 
 impl bindgen::callbacks::ParseCallbacks for BindgenCallbacks {
     fn process_comment(&self, comment: &str) -> Option<String> {
@@ -22,6 +62,22 @@ impl bindgen::callbacks::ParseCallbacks for BindgenCallbacks {
             }
 
             Some(new)
+        } else {
+            None
+        }
+    }
+
+    fn item_name(&self, original_item_name: &str) -> Option<String> {
+        if let Some(&replacement) = self.item_replacements.get(original_item_name) {
+            Some(String::from(replacement))
+        } else {
+            None
+        }
+    }
+
+    fn process_field_name(&self, parent_name: &str, name: &str) -> Option<String> {
+        if let Some(&replacement) = self.field_name_replacements.get(&(parent_name, name)) {
+            Some(String::from(replacement))
         } else {
             None
         }
@@ -86,7 +142,6 @@ fn main() {
         .blocklist_type("RpsResourceViewFlags")
         .blocklist_type("RpsRecordCommandFlags")
         .blocklist_type("RpsRenderGraphDiagnosticInfoFlags")
-        //
         .clang_args([
             "-I",
             "RenderPipelineShaders/include",
@@ -97,7 +152,7 @@ fn main() {
             "c++",
         ])
         .enable_cxx_namespaces()
-        .parse_callbacks(Box::new(BindgenCallbacks))
+        .parse_callbacks(Box::new(BindgenCallbacks::new()))
         .generate()
         .expect("Unable to generate bindings");
 
