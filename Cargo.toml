@@ -8,4 +8,4 @@ render-pipeline-shaders = { git = "https://github.com/expenses/render-pipeline-s
 render-pipeline-shaders-sys = { git = "https://github.com/expenses/render-pipeline-shaders-rs", branch = "changes" }
 
 [build-dependencies]
-bindgen = { path = "../rust-bindgen/bindgen"}
+bindgen = { git = "https://github.com/expenses/rust-bindgen", branch = "process-field-name" }
