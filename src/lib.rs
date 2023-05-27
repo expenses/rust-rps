@@ -84,21 +84,21 @@ pub mod callbacks {
 
     pub unsafe extern "C" fn create_resources(
         _context: *const c_void,
-        array: *mut c_void,
-        user_data: *mut c_void,
+        _array: *mut c_void,
+        _user_data: *mut c_void,
     ) -> ffi::RpsResult {
         rps::Result::OK.into_raw()
     }
 
     pub unsafe extern "C" fn record_commands(
-        render_graph: *const c_void,
-        record_info: *const ffi::RpsRenderGraphRecordCommandInfo,
+        _render_graph: *const c_void,
+        _record_info: *const ffi::RpsRenderGraphRecordCommandInfo,
     ) -> ffi::RpsResult {
         rps::Result::OK.into_raw()
     }
 
     pub unsafe extern "C" fn destroy_runtime_resource_deferred(
-        resource: *mut c_void,
+        _resource: *mut c_void,
         _user_data: *mut c_void,
     ) {
     }
@@ -107,7 +107,7 @@ pub mod callbacks {
         cmd_callback_ignore_ffi(context as _)
     }
 
-    pub unsafe extern "C" fn cmd_callback_ignore_ffi(context: *const ffi::RpsCmdCallbackContext) {}
+    pub unsafe extern "C" fn cmd_callback_ignore_ffi(_context: *const ffi::RpsCmdCallbackContext) {}
 
     pub unsafe extern "C" fn cmd_callback_warn_unused(context: *const rps::CmdCallbackContext) {
         cmd_callback_warn_unused_ffi(context as _)
